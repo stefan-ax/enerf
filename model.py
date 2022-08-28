@@ -158,7 +158,8 @@ def raw2outputs(
         rays_d: torch.Tensor,
         raw_noise_std: float = 0.0,
         white_bkgd: bool = False,
-        d_output: int = 3
+        d_output: int = 3,
+        log_intensity: bool = False
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     r"""
     Convert the raw NeRF output into RGB and other maps.
@@ -187,7 +188,10 @@ def raw2outputs(
     weights = alpha * cumprod_exclusive(1. - alpha + 1e-10)
 
     # Compute weighted RGB map.
-    rgb = torch.sigmoid(raw[..., :d_output])  # [n_rays, n_samples, 3]
+    if log_intensity:
+        rgb = torch.relu(raw[..., :d_output])
+    else:
+        rgb = torch.sigmoid(raw[..., :d_output])  # [n_rays, n_samples, 3]
     rgb_map = torch.sum(weights[..., None] * rgb, dim=-2)  # [n_rays, 3]
 
     # Estimated depth map is predicted distance.
@@ -220,7 +224,8 @@ def nerf_forward(
         fine_model=None,
         viewdirs_encoding_fn: Optional[Callable[[torch.Tensor], torch.Tensor]] = None,
         chunksize: int = 2 ** 15,
-        d_output=3
+        d_output=3,
+        log_intensity = False
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict]:
     r"""
     Compute forward pass through model(s).
@@ -255,7 +260,8 @@ def nerf_forward(
     raw = raw.reshape(list(query_points.shape[:2]) + [raw.shape[-1]])
 
     # Perform differentiable volume rendering to re-synthesize the RGB image.
-    rgb_map, depth_map, acc_map, weights = raw2outputs(raw, z_vals, rays_d, d_output=d_output)
+    rgb_map, depth_map, acc_map, weights = raw2outputs(raw, z_vals, rays_d,
+                                                       d_output=d_output, log_intensity=log_intensity)
     # rgb_map, depth_map, acc_map, weights = render_volume_density(raw, rays_o, z_vals)
     outputs = {
         'z_vals_stratified': z_vals
@@ -289,7 +295,8 @@ def nerf_forward(
         raw = raw.reshape(list(query_points.shape[:2]) + [raw.shape[-1]])
 
         # Perform differentiable volume rendering to re-synthesize the RGB image.
-        rgb_map, depth_map, acc_map, weights = raw2outputs(raw, z_vals_combined, rays_d, d_output=d_output)
+        rgb_map, depth_map, acc_map, weights = raw2outputs(raw, z_vals_combined, rays_d,
+                                                           d_output=d_output, log_intensity=log_intensity)
 
         # Store outputs.
         outputs['z_vals_hierarchical'] = z_hierarch
@@ -399,7 +406,8 @@ def train(model, fine_model, optimizer, warmup_stopper,
                                   fine_model=fine_model,
                                   viewdirs_encoding_fn=encode_viewdirs,
                                   chunksize=config['chunksize'],
-                                  d_output=config['d_output'])
+                                  d_output=config['d_output'],
+                                  log_intensity=config['log_intensity'])
 
         outputs_t1 = nerf_forward(rays_o_t1, rays_d_t1,
                                   config['near'], config['far'], encode, model,
@@ -409,7 +417,8 @@ def train(model, fine_model, optimizer, warmup_stopper,
                                   fine_model=fine_model,
                                   viewdirs_encoding_fn=encode_viewdirs,
                                   chunksize=config['chunksize'],
-                                  d_output=config['d_output'])
+                                  d_output=config['d_output'],
+                                  log_intensity=config['log_intensity'])
 
         # Check for any numerical issues.
         for k, v in outputs_t0.items():
@@ -426,8 +435,12 @@ def train(model, fine_model, optimizer, warmup_stopper,
 
         # Backprop!
         predicted_image_t0 = outputs_t0['rgb_map']
-        # predicted_image_t0 = torch.log(predicted_image_t0[predicted_image_t0 != 0])
         predicted_image_t1 = outputs_t1['rgb_map']
+
+        if config['log_intensity']:
+            predicted_image_t0[predicted_image_t0 != 0] = torch.log(predicted_image_t0[predicted_image_t0 != 0])
+            predicted_image_t1[predicted_image_t1 != 0] = torch.log(predicted_image_t1[predicted_image_t1 != 0])
+
         # plt.imshow(torch.clone(rgb_predicted).cpu().detach().numpy().reshape(50, 50, 3))
         # plt.imshow(torch.clone(predicted_image_t0).cpu().detach().numpy().reshape(height, width, 1))
         loss = torch.nn.functional.mse_loss(predicted_image_t1[:, 0] - predicted_image_t0[:, 0],
@@ -465,7 +478,8 @@ def train(model, fine_model, optimizer, warmup_stopper,
                                                      fine_model=fine_model,
                                                      viewdirs_encoding_fn=encode_viewdirs,
                                                      chunksize=config['chunksize'],
-                                                     d_output=config['d_output']))
+                                                     d_output=config['d_output'],
+                                                     log_intensity=config['log_intensity']))
 
             rgbs_predicted = [out['rgb_map'] for out in test_outputs]
             losses = [torch.nn.functional.mse_loss(rgb_predicted[:, 0], testimg.reshape(-1))
@@ -480,12 +494,18 @@ def train(model, fine_model, optimizer, warmup_stopper,
 
             # Plot example outputs
             fig, ax = plt.subplots(1, 4, figsize=(24, 4), gridspec_kw={'width_ratios': [1, 1, 1, 3]})
-            ax[0].imshow(rgbs_predicted[0].reshape([height, width]).detach().cpu().numpy())
+            if config['log_intensity']:
+                ax[0].imshow(np.exp(rgbs_predicted[0].reshape([height, width]).detach().cpu().numpy()))
+            else:
+                ax[0].imshow(rgbs_predicted[0].reshape([height, width]).detach().cpu().numpy())
             ax[0].set_title("Test pose 0")
             ax[0].set_xlabel(f'Iteration: {i}')
             ax[0].set_axis_off()
 
-            ax[1].imshow(rgbs_predicted[1].reshape([height, width]).detach().cpu().numpy())
+            if config['log_intensity']:
+                ax[1].imshow(np.exp(rgbs_predicted[1].reshape([height, width]).detach().cpu().numpy()))
+            else:
+                ax[1].imshow(rgbs_predicted[1].reshape([height, width]).detach().cpu().numpy())
             ax[1].set_title(f'Test pose 1')
             ax[1].set_axis_off()
 

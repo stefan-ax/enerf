@@ -16,6 +16,7 @@
   "n_samples": 64,
   "perturb": true,
   "inverse_depth": false,
+  "log_intensity": true,
         
   "d_filter": 32,
   "n_layers": 2,
