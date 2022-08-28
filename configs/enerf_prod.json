@@ -1,15 +1,16 @@
 {
-  "data_path": "data/tiny_nerf_data.npz",
+  "data_path": "data/simulation_3planes.npz",
   "device": "cuda",
   "near": 2.0,
   "far": 6.0,
-  "testimg_idx": 101,
+  "testimg_idx": 51,
   
   "d_input": 3,
+  "d_output": 1,
   "n_freqs": 10,
   "log_space": true,
   "use_viewdirs": true,
-  "n_freqs_views": 4,
+  "n_freqs_views": 2,
         
   "n_samples": 64,
   "perturb": true,
@@ -27,17 +28,18 @@
 
   "lr": 5e-4,
 
-  "n_iters": 2,
+  "n_iters": 2000,
   "batch_size": 16384,
   "one_image_per_step": true,
-  "chunksize": 16,
+  "chunksize": 16384,
   "center_crop": true,
   "center_crop_iters": 50,
-  "display_rate": 25,
+  "display": true,
+  "display_rate": 200,
   
 
   "warmup_iters": 100,
-  "warmup_min_fitness": 10.0,
+  "warmup_min_fitness": -100.0,
   "n_restarts": 10,
 
   "kwargs_sample_stratified": {

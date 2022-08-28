@@ -1,0 +1,54 @@
+{
+  "data_path": "data/simulation_3planes.npz",
+  "device": "cuda",
+  "near": 2.0,
+  "far": 6.0,
+  "testimg_idx": 51,
+  
+  "d_input": 3,
+  "d_output": 1,
+  "n_freqs": 5,
+  "log_space": true,
+  "use_viewdirs": true,
+  "n_freqs_views": 2,
+        
+  "n_samples": 64,
+  "perturb": true,
+  "inverse_depth": false,
+        
+  "d_filter": 16,
+  "n_layers": 2,
+  "skip": [],
+  "use_fine_model": true,
+  "d_filter_fine": 16,
+  "n_layers_fine": 6,
+
+  "n_samples_hierarchical": 64,
+  "perturb_hierarchical": false,
+
+  "lr": 5e-4,
+
+  "n_iters": 50,
+  "batch_size": 16384,
+  "one_image_per_step": true,
+  "chunksize": 1024,
+  "center_crop": true,
+  "center_crop_iters": 50,
+  "display": true,
+  "display_rate": 25,
+  
+
+  "warmup_iters": 100,
+  "warmup_min_fitness": 1.0,
+  "n_restarts": 10,
+
+  "kwargs_sample_stratified": {
+      "n_samples": 64,
+      "perturb": true,
+      "inverse_depth": false
+  },
+
+  "kwargs_sample_hierarchical": {
+      "perturb": true
+  }
+}
