@@ -76,6 +76,10 @@ if __name__ == '__main__':
 
                 images[general_idx, int(x), int(y)] += p
 
+        print(f"Images rescaled by dividing of maximum {images.max()}")
+        images = images / images.max()
+
+
     with open(os.path.join(args.path, 'calib.txt')) as fin:
         focal = float(fin.read().split(" ")[0])
 
