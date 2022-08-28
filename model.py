@@ -510,7 +510,7 @@ def train(model, fine_model, optimizer, warmup_stopper,
             ax[1].set_axis_off()
 
             ax[2].plot(range(0, i + 1), train_mses, 'r', label='train')
-            ax[2].plot(iternums, val_mses, 'b', label='blue')
+            ax[2].plot(iternums, val_mses, 'b', label='val')
             ax[2].set_title('MSE')
             ax[2].set_yscale('log')
             ax[2].legend()
