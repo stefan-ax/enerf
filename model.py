@@ -459,7 +459,7 @@ def train(model, fine_model, optimizer, warmup_stopper,
             rgbs_predicted = [out['rgb_map'] for out in test_outputs]
             losses = [torch.nn.functional.mse_loss(rgb_predicted[:, 0], testimg.reshape(-1))
                       for rgb_predicted in rgbs_predicted]
-            print("Losses: --- ", losses[0].item(), ' --- ', losses[1].item())
+            # print("Losses: --- ", losses[0].item(), ' --- ', losses[1].item())
             val_psnr = sum([-10. * torch.log10(loss) for loss in losses])/2
 
             val_psnrs.append(val_psnr.item())
