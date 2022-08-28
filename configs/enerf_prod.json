@@ -28,7 +28,7 @@
   "n_samples_hierarchical": 64,
   "perturb_hierarchical": false,
 
-  "lr": 5e-7,
+  "lr": 5e-5,
 
   "n_iters": 2000,
   "batch_size": 16384,
@@ -42,6 +42,7 @@
 
   "warmup_iters": 25,
   "warmup_min_fitness": 8.0,
+  "warmup_max_mse": 0.5,
   "n_restarts": 10,
 
   "kwargs_sample_stratified": {

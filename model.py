@@ -532,9 +532,11 @@ def train(model, fine_model, optimizer, warmup_stopper,
 
         # Check PSNR for issues and stop if any are found.
         if i == config['warmup_iters'] - 1:
-            if val_psnr < config['warmup_min_fitness']:
-                print(f"Val PSNR {val_psnr} below warmup_min_fitness {config['warmup_min_fitness']}. Stopping...")
-                return False, train_psnrs, val_psnrs
+            # if val_psnr < config['warmup_min_fitness']:
+            #     print(f"Val PSNR {val_psnr} below warmup_min_fitness {config['warmup_min_fitness']}. Stopping...")
+            # return False, train_psnrs, val_psnrs
+            if val_mse > config['warmup_max_mse']:
+                return False, train_mses, val_mses
         elif i < config['warmup_iters']:
             if warmup_stopper is not None and warmup_stopper(i, psnr):
                 print(f'Train PSNR flatlined at {psnr} for {warmup_stopper.patience} iters. Stopping...')
