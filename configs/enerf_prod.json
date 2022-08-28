@@ -42,6 +42,7 @@
 
   "warmup_iters": 25,
   "warmup_min_fitness": 8.0,
+  "warmup_max_mse": 0.5,
   "n_restarts": 10,
 
   "kwargs_sample_stratified": {
