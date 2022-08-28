@@ -10,13 +10,13 @@
   "n_freqs": 10,
   "log_space": true,
   "use_viewdirs": true,
-  "n_freqs_views": 2,
+  "n_freqs_views": 4,
         
   "n_samples": 64,
   "perturb": true,
   "inverse_depth": false,
         
-  "d_filter": 128,
+  "d_filter": 64,
   "n_layers": 2,
   "skip": [],
   "use_fine_model": true,
@@ -29,13 +29,13 @@
   "lr": 5e-4,
 
   "n_iters": 2000,
-  "batch_size": 16384,
+  "batch_size": 4096,
   "one_image_per_step": true,
-  "chunksize": 16384,
+  "chunksize": 4096,
   "center_crop": true,
   "center_crop_iters": 50,
   "display": true,
-  "display_rate": 200,
+  "display_rate": 20,
   
 
   "warmup_iters": 100,
