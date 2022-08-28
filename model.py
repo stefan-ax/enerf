@@ -1,4 +1,6 @@
+import os
 from typing import Optional, Tuple, List, Union, Callable
+from datetime import datetime
 
 import matplotlib.pyplot as plt
 import torch
@@ -360,7 +362,15 @@ def train(model, fine_model, optimizer, warmup_stopper,
     train_psnrs = []
     train_mses = []
     val_psnrs = []
+    val_mses = []
     iternums = []
+
+    if config['save']:
+        now = datetime.now()
+        dt = now.strftime("%d_%m_%Y_%H_%M")
+        save_folder = os.path.join(config['log_path'], os.path.basename(config['data_path'][:-4]) + '_' + dt)
+        os.makedirs(save_folder, exist_ok=True)
+
     for i in trange(config['n_iters']):
         model.train()
 
@@ -416,6 +426,7 @@ def train(model, fine_model, optimizer, warmup_stopper,
 
         # Backprop!
         predicted_image_t0 = outputs_t0['rgb_map']
+        # predicted_image_t0 = torch.log(predicted_image_t0[predicted_image_t0 != 0])
         predicted_image_t1 = outputs_t1['rgb_map']
         # plt.imshow(torch.clone(rgb_predicted).cpu().detach().numpy().reshape(50, 50, 3))
         # plt.imshow(torch.clone(predicted_image_t0).cpu().detach().numpy().reshape(height, width, 1))
@@ -429,10 +440,10 @@ def train(model, fine_model, optimizer, warmup_stopper,
         psnr = -10. * torch.log10(loss)
         train_psnrs.append(psnr.item())
         train_mses.append(loss.item())
-        print(loss.item())
+        # print(psnr.item())
 
         # Evaluate testimg at given display rate.
-        if i % config['display_rate'] == 0 and config['display']:
+        if i % config['display_rate'] == 0 and config['display'] and i > 0:
             model.eval()
             height, width = testimg.shape[:2]
             rays_o_t0, rays_d_t0 = get_rays(height, width, focal, testpose[0])
@@ -461,8 +472,10 @@ def train(model, fine_model, optimizer, warmup_stopper,
                       for rgb_predicted in rgbs_predicted]
             # print("Losses: --- ", losses[0].item(), ' --- ', losses[1].item())
             val_psnr = sum([-10. * torch.log10(loss) for loss in losses])/2
+            val_mse = sum(losses)/2
 
             val_psnrs.append(val_psnr.item())
+            val_mses.append(val_mse.item())
             iternums.append(i)
 
             # Plot example outputs
@@ -470,13 +483,17 @@ def train(model, fine_model, optimizer, warmup_stopper,
             ax[0].imshow(rgbs_predicted[0].reshape([height, width]).detach().cpu().numpy())
             ax[0].set_title("Test pose 0")
             ax[0].set_xlabel(f'Iteration: {i}')
+            ax[0].set_axis_off()
 
             ax[1].imshow(rgbs_predicted[1].reshape([height, width]).detach().cpu().numpy())
             ax[1].set_title(f'Test pose 1')
+            ax[1].set_axis_off()
 
-            ax[2].plot(range(0, i + 1), train_psnrs, 'r')
-            ax[2].plot(iternums, val_psnrs, 'b')
-            ax[2].set_title('PSNR (train=red, val=blue')
+            ax[2].plot(range(0, i + 1), train_mses, 'r', label='train')
+            ax[2].plot(iternums, val_mses, 'b', label='blue')
+            ax[2].set_title('MSE')
+            ax[2].set_yscale('log')
+            ax[2].legend()
 
             z_vals_strat = test_outputs[0]['z_vals_stratified'].view((-1, config['n_samples']))
             z_sample_strat = z_vals_strat[z_vals_strat.shape[0] // 2].detach().cpu().numpy()
@@ -487,7 +504,11 @@ def train(model, fine_model, optimizer, warmup_stopper,
                 z_sample_hierarch = None
             _ = plot_samples(z_sample_strat, z_sample_hierarch, ax=ax[3])
             ax[3].margins(0)
-            plt.show()
+
+            if config['save']:
+                plt.savefig(os.path.join(save_folder, f'plot_{i}_it.png'), bbox_inches='tight')
+            else:
+                plt.show()
 
         # Check PSNR for issues and stop if any are found.
         if i == config['warmup_iters'] - 1:

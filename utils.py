@@ -211,12 +211,12 @@ def plot_samples(
 
     if ax is None:
         ax = plt.subplot()
-    ax.plot(z_vals, y_vals, 'b-o')
+    ax.plot(z_vals, y_vals, 'b-o', label='Stratified sampling')
     if z_hierarch is not None:
         y_hierarch = np.zeros_like(z_hierarch)
-        ax.plot(z_hierarch, y_hierarch, 'r-o')
+        ax.plot(z_hierarch, y_hierarch, 'r-o', label='Hierarchical sampling')
     ax.set_ylim([-1, 2])
-    ax.set_title('Stratified  Samples (blue) and Hierarchical Samples (red)')
+    ax.legend()
     ax.axes.yaxis.set_visible(False)
     ax.grid(True)
     return ax
