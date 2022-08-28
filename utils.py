@@ -6,17 +6,17 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 
-def _load_data():
-    pass
-
-
 def load_data(path):
-    data = np.load(path)
-    images = data['images']
-    poses = data['poses']
-    focal = data['focal']
+    data = np.load(path, )
+    try:
+        timestamps = data['timestamps'].astype(np.float32)
+    except KeyError:
+        timestamps = np.array([])
+    images = data['images'].astype(np.float32)
+    poses = data['poses'].astype(np.float32)
+    focal = data['focal'].astype(np.float32)
 
-    return images, poses, focal
+    return images, poses, focal, timestamps
 
 
 def get_rays(

@@ -1,5 +1,6 @@
 from typing import Optional, Tuple, List, Union, Callable
 
+import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 from tqdm import trange
@@ -57,7 +58,8 @@ class NeRF(nn.Module):
             n_layers: int = 8,
             d_filter: int = 256,
             skip: Tuple[int] = (4,),
-            d_viewdirs: Optional[int] = None
+            d_viewdirs: Optional[int] = None,
+            d_output: int = 1
     ):
         super().__init__()
         self.d_input = d_input
@@ -78,10 +80,10 @@ class NeRF(nn.Module):
             self.alpha_out = nn.Linear(d_filter, 1)
             self.rgb_filters = nn.Linear(d_filter, d_filter)
             self.branch = nn.Linear(d_filter + self.d_viewdirs, d_filter // 2)
-            self.output = nn.Linear(d_filter // 2, 3)
+            self.output = nn.Linear(d_filter // 2, d_output)
         else:
             # If no viewdirs, use simpler output
-            self.output = nn.Linear(d_filter, 4)
+            self.output = nn.Linear(d_filter, d_output + 1)
 
     def forward(
             self,
@@ -153,7 +155,8 @@ def raw2outputs(
         z_vals: torch.Tensor,
         rays_d: torch.Tensor,
         raw_noise_std: float = 0.0,
-        white_bkgd: bool = False
+        white_bkgd: bool = False,
+        d_output: int = 3
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     r"""
     Convert the raw NeRF output into RGB and other maps.
@@ -171,18 +174,18 @@ def raw2outputs(
     # regularize network during training (prevents floater artifacts).
     noise = 0.
     if raw_noise_std > 0.:
-        noise = torch.randn(raw[..., 3].shape) * raw_noise_std
+        noise = torch.randn(raw[..., d_output].shape) * raw_noise_std
 
     # Predict density of each sample along each ray. Higher values imply
     # higher likelihood of being absorbed at this point. [n_rays, n_samples]
-    alpha = 1.0 - torch.exp(-nn.functional.relu(raw[..., 3] + noise) * dists)
+    alpha = 1.0 - torch.exp(-nn.functional.relu(raw[..., d_output] + noise) * dists)
 
     # Compute weight for RGB of each sample along each ray. [n_rays, n_samples]
     # The higher the alpha, the lower subsequent weights are driven.
     weights = alpha * cumprod_exclusive(1. - alpha + 1e-10)
 
     # Compute weighted RGB map.
-    rgb = torch.sigmoid(raw[..., :3])  # [n_rays, n_samples, 3]
+    rgb = torch.sigmoid(raw[..., :d_output])  # [n_rays, n_samples, 3]
     rgb_map = torch.sum(weights[..., None] * rgb, dim=-2)  # [n_rays, 3]
 
     # Estimated depth map is predicted distance.
@@ -214,7 +217,8 @@ def nerf_forward(
         kwargs_sample_hierarchical: dict = None,
         fine_model=None,
         viewdirs_encoding_fn: Optional[Callable[[torch.Tensor], torch.Tensor]] = None,
-        chunksize: int = 2 ** 15
+        chunksize: int = 2 ** 15,
+        d_output=3
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict]:
     r"""
     Compute forward pass through model(s).
@@ -249,7 +253,7 @@ def nerf_forward(
     raw = raw.reshape(list(query_points.shape[:2]) + [raw.shape[-1]])
 
     # Perform differentiable volume rendering to re-synthesize the RGB image.
-    rgb_map, depth_map, acc_map, weights = raw2outputs(raw, z_vals, rays_d)
+    rgb_map, depth_map, acc_map, weights = raw2outputs(raw, z_vals, rays_d, d_output=d_output)
     # rgb_map, depth_map, acc_map, weights = render_volume_density(raw, rays_o, z_vals)
     outputs = {
         'z_vals_stratified': z_vals
@@ -283,7 +287,7 @@ def nerf_forward(
         raw = raw.reshape(list(query_points.shape[:2]) + [raw.shape[-1]])
 
         # Perform differentiable volume rendering to re-synthesize the RGB image.
-        rgb_map, depth_map, acc_map, weights = raw2outputs(raw, z_vals_combined, rays_d)
+        rgb_map, depth_map, acc_map, weights = raw2outputs(raw, z_vals_combined, rays_d, d_output=d_output)
 
         # Store outputs.
         outputs['z_vals_hierarchical'] = z_hierarch
@@ -319,7 +323,7 @@ def init_models(config):
 
     # Models
     model = NeRF(encoder.d_output, n_layers=config['n_layers'], d_filter=config['d_filter'], skip=config['skip'],
-                 d_viewdirs=d_viewdirs)
+                 d_viewdirs=d_viewdirs, d_output=config['d_output'])
     model.to(config['device'])
     model_params = list(model.parameters())
     if config['use_fine_model']:
@@ -348,68 +352,75 @@ def train(model, fine_model, optimizer, warmup_stopper,
     r"""
     Launch training session for NeRF.
     """
-    # Shuffle rays across all images.
-    if not config['one_image_per_step']:
-        height, width = images.shape[1:3]
-        all_rays = torch.stack([torch.stack(get_rays(height, width, focal, p), 0)
-                                for p in poses[:config['n_training']]], 0)
-        rays_rgb = torch.cat([all_rays, images[:, None]], 1)
-        rays_rgb = torch.permute(rays_rgb, [0, 2, 3, 1, 4])
-        rays_rgb = rays_rgb.reshape([-1, 3, 3])
-        rays_rgb = rays_rgb.type(torch.float32)
-        rays_rgb = rays_rgb[torch.randperm(rays_rgb.shape[0])]
-        i_batch = 0
+    # images.shape = [N, 240, 180]
+    # poses.shape = [N, 2, 4, 4]
+    # testimg.shape = [240, 180]
+    # testpose.shape = [2, 4, 4]
 
     train_psnrs = []
+    train_mses = []
     val_psnrs = []
     iternums = []
     for i in trange(config['n_iters']):
         model.train()
 
-        if config['one_image_per_step']:
-            # Randomly pick an image as the target.
-            target_img_idx = np.random.randint(images.shape[0])
-            target_img = images[target_img_idx].to(config['device'])
-            if config['center_crop'] and i < config['center_crop_iters']:
-                target_img = crop_center(target_img)
-            height, width = target_img.shape[:2]
-            target_pose = poses[target_img_idx].to(config['device'])
-            rays_o, rays_d = get_rays(height, width, focal, target_pose)
-            rays_o = rays_o.reshape([-1, 3])
-            rays_d = rays_d.reshape([-1, 3])
-        else:
-            # Random over all images.
-            batch = rays_rgb[i_batch:i_batch + config['batch_size']]
-            batch = torch.transpose(batch, 0, 1)
-            rays_o, rays_d, target_img = batch
-            height, width = target_img.shape[:2]
-            i_batch += config['batch_size']
-            # Shuffle after one epoch
-            if i_batch >= rays_rgb.shape[0]:
-                rays_rgb = rays_rgb[torch.randperm(rays_rgb.shape[0])]
-                i_batch = 0
-        target_img = target_img.reshape([-1, 3])
+        target_img_idx = np.random.randint(images.shape[0])
+        target_img = images[target_img_idx].to(config['device'])  # Shape [240, 180]
+        if config['center_crop'] and i < config['center_crop_iters']:
+            target_img = crop_center(target_img)
 
-        # Run one iteration of TinyNeRF and get the rendered RGB image.
-        outputs = nerf_forward(rays_o, rays_d,
-                               config['near'], config['far'], encode, model,
-                               kwargs_sample_stratified=config['kwargs_sample_stratified'],
-                               n_samples_hierarchical=config['n_samples_hierarchical'],
-                               kwargs_sample_hierarchical=config['kwargs_sample_hierarchical'],
-                               fine_model=fine_model,
-                               viewdirs_encoding_fn=encode_viewdirs,
-                               chunksize=config['chunksize'])
+        height, width = target_img.shape[:2]
+        target_pose_pair = poses[target_img_idx].to(config['device'])  # Shape [2, 4, 4]
+
+        rays_o_t0, rays_d_t0 = get_rays(height, width, focal, target_pose_pair[0])
+        rays_o_t1, rays_d_t1 = get_rays(height, width, focal, target_pose_pair[1])
+
+        rays_o_t0 = rays_o_t0.reshape([-1, 3])
+        rays_d_t0 = rays_d_t0.reshape([-1, 3])
+        rays_o_t1 = rays_o_t1.reshape([-1, 3])
+        rays_d_t1 = rays_d_t1.reshape([-1, 3])
+
+        # Run NeRF model
+        outputs_t0 = nerf_forward(rays_o_t0, rays_d_t0,
+                                  config['near'], config['far'], encode, model,
+                                  kwargs_sample_stratified=config['kwargs_sample_stratified'],
+                                  n_samples_hierarchical=config['n_samples_hierarchical'],
+                                  kwargs_sample_hierarchical=config['kwargs_sample_hierarchical'],
+                                  fine_model=fine_model,
+                                  viewdirs_encoding_fn=encode_viewdirs,
+                                  chunksize=config['chunksize'],
+                                  d_output=config['d_output'])
+
+        outputs_t1 = nerf_forward(rays_o_t1, rays_d_t1,
+                                  config['near'], config['far'], encode, model,
+                                  kwargs_sample_stratified=config['kwargs_sample_stratified'],
+                                  n_samples_hierarchical=config['n_samples_hierarchical'],
+                                  kwargs_sample_hierarchical=config['kwargs_sample_hierarchical'],
+                                  fine_model=fine_model,
+                                  viewdirs_encoding_fn=encode_viewdirs,
+                                  chunksize=config['chunksize'],
+                                  d_output=config['d_output'])
 
         # Check for any numerical issues.
-        for k, v in outputs.items():
+        for k, v in outputs_t0.items():
+            if torch.isnan(v).any():
+                print(f"! [Numerical Alert] {k} contains NaN.")
+            if torch.isinf(v).any():
+                print(f"! [Numerical Alert] {k} contains Inf.")
+
+        for k, v in outputs_t1.items():
             if torch.isnan(v).any():
                 print(f"! [Numerical Alert] {k} contains NaN.")
             if torch.isinf(v).any():
                 print(f"! [Numerical Alert] {k} contains Inf.")
 
         # Backprop!
-        rgb_predicted = outputs['rgb_map']
-        loss = torch.nn.functional.mse_loss(rgb_predicted, target_img)
+        predicted_image_t0 = outputs_t0['rgb_map']
+        predicted_image_t1 = outputs_t1['rgb_map']
+        # plt.imshow(torch.clone(rgb_predicted).cpu().detach().numpy().reshape(50, 50, 3))
+        # plt.imshow(torch.clone(predicted_image_t0).cpu().detach().numpy().reshape(height, width, 1))
+        loss = torch.nn.functional.mse_loss(predicted_image_t1[:, 0] - predicted_image_t0[:, 0],
+                                            target_img.reshape(-1))
         loss.backward()
         optimizer.step()
         optimizer.zero_grad()
@@ -417,44 +428,60 @@ def train(model, fine_model, optimizer, warmup_stopper,
         # Compute mean-squared error between predicted and target images.
         psnr = -10. * torch.log10(loss)
         train_psnrs.append(psnr.item())
+        train_mses.append(loss.item())
+        print(loss.item())
 
         # Evaluate testimg at given display rate.
-        if i % config['display_rate'] == 0:
+        if i % config['display_rate'] == 0 and config['display']:
             model.eval()
             height, width = testimg.shape[:2]
-            rays_o, rays_d = get_rays(height, width, focal, testpose)
-            rays_o = rays_o.reshape([-1, 3])
-            rays_d = rays_d.reshape([-1, 3])
-            outputs = nerf_forward(rays_o, rays_d,
-                                   config['near'], config['far'], encode, model,
-                                   kwargs_sample_stratified=config['kwargs_sample_stratified'],
-                                   n_samples_hierarchical=config['n_samples_hierarchical'],
-                                   kwargs_sample_hierarchical=config['kwargs_sample_hierarchical'],
-                                   fine_model=fine_model,
-                                   viewdirs_encoding_fn=encode_viewdirs,
-                                   chunksize=config['chunksize'])
+            rays_o_t0, rays_d_t0 = get_rays(height, width, focal, testpose[0])
+            rays_o_t1, rays_d_t1 = get_rays(height, width, focal, testpose[1])
 
-            rgb_predicted = outputs['rgb_map']
-            loss = torch.nn.functional.mse_loss(rgb_predicted, testimg.reshape(-1, 3))
-            print("Loss:", loss.item())
-            val_psnr = -10. * torch.log10(loss)
+            rays_o_t0 = rays_o_t0.reshape([-1, 3])
+            rays_d_t0 = rays_d_t0.reshape([-1, 3])
+            rays_o_t1 = rays_o_t1.reshape([-1, 3])
+            rays_d_t1 = rays_d_t1.reshape([-1, 3])
+
+            test_outputs = []
+            for rays_o, rays_d in zip([rays_o_t0, rays_d_t0], [rays_o_t1, rays_d_t1]):
+                with torch.no_grad():
+                    test_outputs.append(nerf_forward(rays_o, rays_d,
+                                                     config['near'], config['far'], encode, model,
+                                                     kwargs_sample_stratified=config['kwargs_sample_stratified'],
+                                                     n_samples_hierarchical=config['n_samples_hierarchical'],
+                                                     kwargs_sample_hierarchical=config['kwargs_sample_hierarchical'],
+                                                     fine_model=fine_model,
+                                                     viewdirs_encoding_fn=encode_viewdirs,
+                                                     chunksize=config['chunksize'],
+                                                     d_output=config['d_output']))
+
+            rgbs_predicted = [out['rgb_map'] for out in test_outputs]
+            losses = [torch.nn.functional.mse_loss(rgb_predicted[:, 0], testimg.reshape(-1))
+                      for rgb_predicted in rgbs_predicted]
+            print("Losses: --- ", losses[0].item(), ' --- ', losses[1].item())
+            val_psnr = sum([-10. * torch.log10(loss) for loss in losses])/2
 
             val_psnrs.append(val_psnr.item())
             iternums.append(i)
 
             # Plot example outputs
             fig, ax = plt.subplots(1, 4, figsize=(24, 4), gridspec_kw={'width_ratios': [1, 1, 1, 3]})
-            ax[0].imshow(rgb_predicted.reshape([height, width, 3]).detach().cpu().numpy())
-            ax[0].set_title(f'Iteration: {i}')
-            ax[1].imshow(testimg.detach().cpu().numpy())
-            ax[1].set_title(f'Target')
+            ax[0].imshow(rgbs_predicted[0].reshape([height, width]).detach().cpu().numpy())
+            ax[0].set_title("Test pose 0")
+            ax[0].set_xlabel(f'Iteration: {i}')
+
+            ax[1].imshow(rgbs_predicted[1].reshape([height, width]).detach().cpu().numpy())
+            ax[1].set_title(f'Test pose 1')
+
             ax[2].plot(range(0, i + 1), train_psnrs, 'r')
             ax[2].plot(iternums, val_psnrs, 'b')
             ax[2].set_title('PSNR (train=red, val=blue')
-            z_vals_strat = outputs['z_vals_stratified'].view((-1, config['n_samples']))
+
+            z_vals_strat = test_outputs[0]['z_vals_stratified'].view((-1, config['n_samples']))
             z_sample_strat = z_vals_strat[z_vals_strat.shape[0] // 2].detach().cpu().numpy()
-            if 'z_vals_hierarchical' in outputs:
-                z_vals_hierarch = outputs['z_vals_hierarchical'].view((-1, config['n_samples_hierarchical']))
+            if 'z_vals_hierarchical' in test_outputs[0]:
+                z_vals_hierarch = test_outputs[0]['z_vals_hierarchical'].view((-1, config['n_samples_hierarchical']))
                 z_sample_hierarch = z_vals_hierarch[z_vals_hierarch.shape[0] // 2].detach().cpu().numpy()
             else:
                 z_sample_hierarch = None

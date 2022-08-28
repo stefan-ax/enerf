@@ -32,7 +32,10 @@ if __name__ == '__main__':
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     # Load data
-    images, poses, focal = load_data(config['data_path'])
+    images, poses, focal, timestamps = load_data(config['data_path'])
+    # images.shape = [N, 240, 180]
+    # poses.shape = [N, 2, 4, 4]
+    # timestamps.shape = [N, 2]
     height, width = images.shape[1:3]
     testimg, testpose = images[config["testimg_idx"]], poses[config["testimg_idx"]]
 
